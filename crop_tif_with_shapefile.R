@@ -278,3 +278,281 @@ if(length(output_tifs) > 0) {
   cat("空间范围:", paste(as.vector(ext(test_raster)), collapse = ", "), "\n")
   cat("数据范围:", paste(range(values(test_raster), na.rm = TRUE), collapse = " 到 "), "\n")
 }
+
+# 10. 生成可视化图像
+cat("\n生成可视化图像...\n")
+
+if(length(output_tifs) > 0) {
+  
+  # 创建绘图函数
+  plot_raster_with_boundary <- function(raster_path, title, color_palette, boundary_sf) {
+    raster_data <- rast(raster_path)
+    
+    # 绘制栅格
+    plot(raster_data, 
+         main = title,
+         col = color_palette,
+         axes = FALSE,
+         legend = TRUE,
+         mar = c(2, 2, 3, 4))
+    
+    # 叠加边界
+    boundary_vect <- vect(boundary_sf)
+    plot(boundary_vect, add = TRUE, border = "red", lwd = 2, fill = NA)
+    
+    # 添加坐标轴
+    axis(1, las = 1, cex.axis = 0.7)
+    axis(2, las = 1, cex.axis = 0.7)
+    box()
+  }
+  
+  # 定义颜色方案
+  color_schemes <- list(
+    dem = terrain.colors(100),
+    slope = hcl.colors(100, "YlOrRd"),
+    channel = hcl.colors(100, "Blues"),
+    planar = hcl.colors(100, "Grays"),
+    ridge = hcl.colors(100, "Reds"),
+    lcp = hcl.colors(100, "Viridis"),
+    outgoing = hcl.colors(100, "PuBu"),
+    incoming = hcl.colors(100, "GnBu"),
+    mines = hcl.colors(100, "RdBu"),
+    water = hcl.colors(100, "BuGn")
+  )
+  
+  # 根据文件名匹配颜色方案
+  get_color_scheme <- function(filename) {
+    filename_lower <- tolower(filename)
+    if(grepl("dem", filename_lower)) return(color_schemes$dem)
+    if(grepl("slope", filename_lower)) return(color_schemes$slope)
+    if(grepl("channel", filename_lower)) return(color_schemes$channel)
+    if(grepl("planar", filename_lower)) return(color_schemes$planar)
+    if(grepl("ridge", filename_lower)) return(color_schemes$ridge)
+    if(grepl("lcp|density", filename_lower)) return(color_schemes$lcp)
+    if(grepl("outgoing", filename_lower)) return(color_schemes$outgoing)
+    if(grepl("incoming", filename_lower)) return(color_schemes$incoming)
+    if(grepl("mine", filename_lower)) return(color_schemes$mines)
+    if(grepl("water", filename_lower)) return(color_schemes$water)
+    return(hcl.colors(100, "Spectral"))  # 默认颜色
+  }
+  
+  # 生成标题
+  get_plot_title <- function(filename) {
+    filename_clean <- gsub("_cropped\\.tif$", "", filename)
+    filename_clean <- gsub("^\\d+_", "", filename_clean)  # 移除数字前缀
+    
+    title_map <- list(
+      "dem" = "Digital Elevation Model (DEM)",
+      "slope" = "Slope",
+      "channel" = "Channel Network",
+      "planar" = "Planar Curvature",
+      "ridge" = "Ridge Features",
+      "lcp_density" = "LCP Density",
+      "outgoing_viewshed" = "Outgoing Viewshed",
+      "incoming_viewshed" = "Incoming Viewshed",
+      "walking_time_to_mines" = "Walking Time to Mines",
+      "walking_time_to_water" = "Walking Time to Water"
+    )
+    
+    # 查找匹配的标题
+    for(key in names(title_map)) {
+      if(grepl(key, filename_clean)) {
+        return(title_map[[key]])
+      }
+    }
+    
+    # 如果没找到匹配，使用文件名
+    return(tools::toTitleCase(gsub("_", " ", filename_clean)))
+  }
+  
+  # 1. 生成单独的图像文件
+  cat("生成单独的图像文件...\n")
+  for(i in seq_along(output_tifs)) {
+    tif_file <- output_tifs[i]
+    tif_path <- file.path(output_folder, tif_file)
+    
+    # 生成输出文件名
+    plot_name <- gsub("\\.tif$", ".png", tif_file)
+    plot_path <- file.path(output_folder, plot_name)
+    
+    tryCatch({
+      # 开始绘图设备
+      png(plot_path, width = 800, height = 600, res = 150)
+      
+      # 设置边距
+      par(mar = c(4, 4, 3, 6))
+      
+      # 绘制图像
+      plot_raster_with_boundary(
+        tif_path, 
+        get_plot_title(tif_file),
+        get_color_scheme(tif_file),
+        boundary
+      )
+      
+      # 关闭绘图设备
+      dev.off()
+      
+      cat("✓ 生成:", plot_name, "\n")
+      
+    }, error = function(e) {
+      cat("✗ 绘图失败:", tif_file, "-", e$message, "\n")
+      if(dev.cur() != 1) dev.off()  # 确保关闭设备
+    })
+  }
+  
+  # 2. 生成综合图像（多子图）
+  cat("\n生成综合展示图像...\n")
+  
+  # 计算最佳的子图布局
+  n_plots <- length(output_tifs)
+  if(n_plots <= 4) {
+    nrow <- 2; ncol <- 2
+  } else if(n_plots <= 6) {
+    nrow <- 2; ncol <- 3
+  } else if(n_plots <= 9) {
+    nrow <- 3; ncol <- 3
+  } else if(n_plots <= 12) {
+    nrow <- 3; ncol <- 4
+  } else {
+    nrow <- 4; ncol <- 4
+  }
+  
+  # 生成综合图像
+  combined_plot_path <- file.path(output_folder, "all_parameters_combined.png")
+  
+  tryCatch({
+    # 创建大图
+    png(combined_plot_path, width = ncol * 400, height = nrow * 300, res = 150)
+    
+    # 设置多子图布局
+    par(mfrow = c(nrow, ncol), mar = c(2, 2, 3, 4))
+    
+    # 绘制每个子图
+    for(i in seq_along(output_tifs)) {
+      if(i > nrow * ncol) break  # 如果超出布局范围就停止
+      
+      tif_file <- output_tifs[i]
+      tif_path <- file.path(output_folder, tif_file)
+      
+      plot_raster_with_boundary(
+        tif_path, 
+        get_plot_title(tif_file),
+        get_color_scheme(tif_file),
+        boundary
+      )
+    }
+    
+    # 如果有剩余的子图位置，留空
+    if(n_plots < nrow * ncol) {
+      for(i in (n_plots + 1):(nrow * ncol)) {
+        plot.new()
+      }
+    }
+    
+    # 重置图形参数
+    par(mfrow = c(1, 1))
+    
+    # 关闭设备
+    dev.off()
+    
+    cat("✓ 生成综合图像: all_parameters_combined.png\n")
+    
+  }, error = function(e) {
+    cat("✗ 综合图像生成失败:", e$message, "\n")
+    if(dev.cur() != 1) dev.off()
+  })
+  
+  # 3. 生成边界图
+  cat("\n生成边界范围图像...\n")
+  boundary_plot_path <- file.path(output_folder, "study_area_boundary.png")
+  
+  tryCatch({
+    png(boundary_plot_path, width = 600, height = 600, res = 150)
+    
+    par(mar = c(4, 4, 3, 2))
+    
+    # 绘制边界
+    boundary_vect <- vect(boundary)
+    plot(boundary_vect, 
+         main = "Study Area Boundary",
+         border = "red", 
+         col = "lightblue",
+         lwd = 2)
+    
+    # 添加坐标轴
+    axis(1, las = 1)
+    axis(2, las = 1)
+    box()
+    
+    # 添加网格
+    grid(col = "gray", lty = 2)
+    
+    dev.off()
+    
+    cat("✓ 生成边界图像: study_area_boundary.png\n")
+    
+  }, error = function(e) {
+    cat("✗ 边界图像生成失败:", e$message, "\n")
+    if(dev.cur() != 1) dev.off()
+  })
+  
+  # 4. 生成图像列表
+  cat("\n生成的图像文件:\n")
+  plot_files <- list.files(output_folder, pattern = "\\.png$")
+  for(plot_file in plot_files) {
+    cat("✓", plot_file, "\n")
+  }
+  
+} else {
+  cat("没有成功处理的tif文件，跳过可视化\n")
+}
+
+# 11. 最终总结
+cat("\n" , paste(rep("=", 80), collapse = ""), "\n")
+cat("处理完成总结\n")
+cat(paste(rep("=", 80), collapse = ""), "\n")
+
+cat("原始文件夹:", target_folder, "\n")
+cat("输出文件夹:", output_folder, "\n")
+cat("使用的边界文件:", basename(shapefile_path), "\n")
+cat("目标坐标系:", target_crs, "\n")
+cat("目标分辨率:", target_resolution, "米\n")
+cat("空值设置:", na_value, "\n\n")
+
+cat("处理结果:\n")
+cat("- 成功处理的tif文件:", success_count, "个\n")
+cat("- 处理失败的文件:", error_count, "个\n")
+
+if(success_count > 0) {
+  cat("\n生成的输出文件:\n")
+  
+  # 裁剪后的tif文件
+  output_tifs <- list.files(output_folder, pattern = "_cropped\\.tif$")
+  cat("栅格数据文件 (", length(output_tifs), "个):\n")
+  for(tif in output_tifs) {
+    cat("  ✓", tif, "\n")
+  }
+  
+  # 图像文件
+  plot_files <- list.files(output_folder, pattern = "\\.png$")
+  if(length(plot_files) > 0) {
+    cat("\n可视化图像文件 (", length(plot_files), "个):\n")
+    for(png in plot_files) {
+      cat("  ✓", png, "\n")
+    }
+  }
+  
+  # 报告文件
+  cat("\n报告文件:\n")
+  if(file.exists(file.path(output_folder, "processing_log.txt"))) {
+    cat("  ✓ processing_log.txt (处理日志)\n")
+  }
+  if(file.exists(file.path(output_folder, "processing_summary.csv"))) {
+    cat("  ✓ processing_summary.csv (处理汇总表)\n")
+  }
+}
+
+cat("\n所有文件已保存到:", output_folder, "\n")
+cat("可以直接用于MaxEnt建模或其他GIS分析！\n")
+cat(paste(rep("=", 80), collapse = ""), "\n")
